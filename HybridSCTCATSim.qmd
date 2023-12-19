@@ -1,0 +1,249 @@
+---
+title: "Hybrid SCT CAT"
+author: "Robert Chapman"
+format: revealjs
+editor: visual
+---
+
+    ```{r echo=FALSE}
+    load("~/Documents/GitHub/HybridSCTCATSim/HybridSCTCAT.RData")
+    ```
+
+## Rationale:\
+*why we're doing this work*\
+\
+
+:::: {.columns}
+
+::: {.column width="70%"}
+Tale of two tests:
+
+1.  Sequential Classification Test (SCT).
+
+2.  Computerized Adaptive Test (CAT).
+
+:::
+::: {.column width="30%"}
+![](/Users/chapm564/Documents/GitHub/HybridSCTCATSim/Pres_MemeChoice.jpeg){width="75%"}
+:::
+
+::::
+
+
+## Rationale: \
+*why we're doing this work*\
+\
+![](/Users/chapm564/Documents/GitHub/HybridSCTCATSim/Pres_WhyNotBoth.jpeg){width="75%"}
+
+## Literature Review: \
+*what's already out there*\
+\
+So there's not really any literature looking at this.
+
+## Methods: \
+*Classification & CAT*\
+\
+**Step 1 - SCT: Classification**\
+-   Sequential Probability Ratio Test\
+\
+**Step 2 - CAT: Measurement**\
+-   Standard Computerized Adaptive Tests\
+
+## Design: \
+*Items and People*\
+\
+**Item/Bank Characteristics:**\
+-   2pl\
+-   300 items\
+-   information roughly centered around cutpoint\
+
+**People:**\
+-   MLE estimation (*kinda*)\
+-   normal distribution of simulee true thetas\
+-   uniform distribution of simulee true thetas\
+
+## Design: \
+*Hybrid SCT/CAT Settings*\
+\
+
+:::: {.columns}
+
+::: {.column width="50%"}
+**Classification:**\
+-   Dichotomous classification\
+-   SPRT\
+-   MLE Scoring*\
+-   Min. 5 items\
+-   Max. 10 items\
+
+Implemented by the *catIrt* R package.
+:::
+
+::: {.column width="50%"}
+**CAT:**\
+-   Item Selection: Max Info\
+-   MLE Scoring*\
+-   Termination Criteria: SE \<0.3\
+-   Min 5 Items\
+-   Max 50 Items\
+:::
+::::
+
+## Design: \
+*CAT Settings*\
+\
+**CAT:**\
+-   Item Selection: Maximum Information\
+-   Termination Criteria: SE \<0.3\
+-   Min 10 Items\
+-   Min 50 Items\
+
+Implemented by the *catIrt* R package.
+
+## Results: 
+*Descriptives of Items* \ 
+
+```{r}
+plot(seq(-3.5,3.5,0.1),Bankinfo, main="Bank Information", xlab="Theta", ylab="Bank Information")
+abline(v=1, col="red")
+```
+
+```{css}
+#| echo: false
+.reveal table {
+  font-size: 0.6em;
+}
+
+```
+
+| Parameter    | Min/Max    | Mean(SD)   | Gen. Distr.      |
+|--------------|------------|------------|------------------|
+| a (Discrim.) | 1.0/3.0    | 2.1(0.59)  | Unif\[1.0,3.0\]  |
+| b (Location) | -1.27/2.12 | 0.78(0.67) | Beta\[3,5\]\*4-2 |
+
+## Results: 
+*Descriptives of Persons* \ 
+
+:::: {.columns}
+
+::: {.column width="50%"}
+```{r}
+hist(PeopleNormalDist, main="Histogram of Simulees pulled sampled a Normal Distribution", xlab="Theta")
+
+print(paste("Mean:",round(mean(PeopleNormalDist,2))))
+print(paste("SD:",round(sd(PeopleNormalDist,2))))
+print(paste("Min:",round(min(PeopleNormalDist),2),
+            "/Max:",round(max(PeopleNormalDist,2))))
+
+```
+Generating Distribution: rnorm(500,m=0,sd=1)
+
+:::
+
+::: {.column width="50%"}
+```{r}
+hist(PeopleUniformDist, main="Histogram of Simulees sampled from a Uniform Distribution", xlab="Theta",breaks=seq(-3.75,3.75,0.5), xaxt='n')
+axis(1, at=seq(-3,3,1),labels=seq(-3,3,1))
+table(PeopleUniformDist)
+```
+Generating Distribution: Unif[-3,3]
+
+:::
+
+::::
+
+
+## Results: \
+*Classification Accuracy of SCT*\
+
+```{r}
+plot(seq(-3,3,1),HybridUniAcc, xlim=c(-3,3), ylim=c(0,1.1),type="l",main="Classification Accuracy", xlab="Theta", ylab="Average Classification Accuracy")
+abline(v=CutPoint, lty=2)
+
+print(HybridUniAcc)
+```
+## Results: \
+*Classification Accuracy of SCT*\
+\
+**Average classification accuracy of SCT:**\
+\
+Normal Dist. Pop.- `r mean(SPRTNormClassAcc)`\
+\
+Uniform Dist.- `r mean(SPRTUnifClassAcc)`\
+
+## Results: \
+*Efficiency (Number of Items Administered) *\
+
+```{r}
+plot(NA, xlim=c(-3,3), ylim=c(5,50), main="Number of Items", xlab="Theta", ylab=" Average Number of Items Administered")
+lines(seq(-3,3,1), HybridUnifNI, col="red")
+lines(seq(-3,3,1), CatUnifNI, col="blue")
+legend(-1,40, legend=c("Hybrid","Cat"), col=c("red","blue"),lty=c(1,1))
+
+```
+
+## Results: \
+*Efficiency (Number of Items Administered) *\
+\
+**NI Hybrid SCT/CAT vs CAT**\
+*in Normal Dist. Pop., Min|Max Mean(SD)*\
+\
+Hybrid SCT/SCT - \
+`r paste0(min(unlist(SPRTNormNI["Hybrid",])),"|",
+max(unlist(SPRTNormNI["Hybrid",]))," ",
+round(mean(unlist(SPRTNormNI["Hybrid",])),2),"(",
+round(sd(unlist(SPRTNormNI["Hybrid",])),2),")")`\
+\
+Cat - \
+`r paste0(min(unlist(SPRTNormNI["Cat",])),"|",
+max(unlist(SPRTNormNI["Cat",]))," ",
+round(mean(unlist(SPRTNormNI["Cat",])),2),"(",
+round(sd(unlist(SPRTNormNI["Cat",])),2),")")`\
+
+## Results: \
+*Measurement Bias (Average Bias)*\
+
+```{r}
+plot(NA, xlim=c(-3,3), ylim=c(-5,5), main="Bias", xlab="Theta", ylab="Bias")
+lines(seq(-3,3,1), HybridUnifBias, col="red")
+lines(seq(-3,3,1), CatUnifBias, col="blue")
+abline(h=0, lty=2)
+legend(-1,4, legend=c("Hybrid","Cat"), col=c("red","blue"),lty=c(1,1))
+
+```
+**Average Bias Hybrid SCT/CAT vs CAT :**\
+Normal Dist. Pop.- `r round(SPRTNormBias[c("PostClassCat","Cat")],3)`\
+
+
+## Results: \
+*Measurement Bias (RMSE)*\
+
+```{r}
+plot(NA, xlim=c(-3,3), ylim=c(0,0.25), main="RMSE", xlab="Theta", ylab="RMSE")
+lines(seq(-3,3,1), HybridUnifRMSE, col="red")
+lines(seq(-3,3,1), CatUnifRMSE, col="blue")
+legend(-1,0.25, legend=c("Hybrid","Cat"), col=c("red","blue"),lty=c(1,1))
+
+```
+**Average Bias Hybrid SCT/CAT vs CAT :**\
+Normal Dist. Pop.- `r round(SPRTNormRMSE[c("PostClassCat","Cat")],3)`\
+
+## Results: \
+*Precision (Average SEM)*\
+
+```{r}
+plot(NA, xlim=c(-3,3), ylim=c(0,0.5), main="Average SEM", xlab="Theta", ylab="Standard Error of Measurement")
+lines(seq(-3,3,1), HybridUnifSEM, col="red")
+lines(seq(-3,3,1), CatUnifSEM, col="blue")
+legend(-1,0.5, legend=c("Hybrid","Cat"), col=c("red","blue"),lty=c(1,1))
+
+```
+
+## Discussion: \
+\
+It works pretty well? Right?\
+\
+Other knobs and switches\
+\
+Alternative hybrid models\
+\

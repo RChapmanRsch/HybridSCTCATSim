@@ -1,0 +1,597 @@
+---
+title: "HybridSCTCAT"
+author: "RobertChapman"
+date: "2023-10-23"
+output: html_document
+---
+
+To be done:
+
+do lit review for classification and measurement cat
+
+1) Dichot/2pl case-
+
+Step 1: make a classification about whether folks are above/below theta =1
+Step 2: after classification, then transition to make a measurement cat
+
+contrast classification only & measurement only
+Sens/Spec & NPV & PPV
+RMSE/Bias
+
+
+```{r SimulateParamsPeople}
+
+#Simulees, both a specific distribution (e.g., normal) and uniform distribution
+SampleSize=500
+
+PeopleNormalDist=rnorm(SampleSize,0,1)
+PeopleUniformDist=round(((-3.4999*SampleSize):(3.4999*SampleSize))/SampleSize)
+
+#Simulated Items
+NI=300
+CutPoint=1
+
+Items=data.frame(
+        "a"=sample(seq(1,3,0.01),NI,replace=TRUE),
+        "b"=sample((rbeta(300,4,3)*4-1.5),NI,replace=TRUE))
+
+#BankInfo
+Bankinfo=rowSums(
+          apply(Items,1,function(item){
+            sapply(seq(-3.5,3.5,0.1),function(theta){
+              prob=1/(1+exp(-1.7*item["a"]*(theta-item["b"])))
+              Info=1.7^2*a^2*prob*(1-prob)})}))
+
+png("BankInfo.jpg",width=640, height=480)
+plot(seq(-3.5,3.5,0.1), Bankinfo, type="l", xlab="Theta", ylab="Information")
+abline(v=1, col="red")
+dev.off()
+
+
+#Simulated Response Data
+
+RespDataNormalDist=t(sapply(PeopleNormalDist, function(person){
+    prob=apply(Items,1,function(item){1/(1+exp(-1.7*item["a"]*(person-item["b"])))})
+    resp=sapply(prob,function(p){sample(c(1,0),1,prob=c(p,1-p))})
+    }))
+
+RespDataUniformDist=t(sapply(PeopleUniformDist, function(person){
+    prob=apply(Items,1,function(item){1/(1+exp(-1.7*item["a"]*(person-item["b"])))})
+    resp=sapply(prob,function(p){sample(c(1,0),1,prob=c(p,1-p))})
+    }))
+    
+```
+
+
+```{r SimulateSCTCAT}
+#install.packages("catIrt")
+library(catIrt)
+
+ClassStart<-list(
+  init.theta=CutPoint,
+  n.start=1, 
+  select="UW-FI",
+  at="theta", 
+  n.select=1,
+  it.range=NULL, 
+  score="step", #<- unclear if this is needed, or what it should be
+  range=c(-3,3.5), 
+  step.size=1, #, <- unclear if this is needed, or what it should be
+  leave.after.MLE=FALSE) 
+
+ClassOperation<-list(
+  select="UW-FI",
+  at="theta",
+  n.select=1,
+  it.range=NULL,
+  score="MLE",
+  range=c(-3.5,3.5),
+  expos="none")
+
+ClassTermination<-list(
+  term="class",
+  n.min=5,
+  n.max=10,
+  c.term=list(
+    method="SPRT",
+    bounds=1, #bounds=cutpoint-1
+    delta=.2,
+    alpha=.10,
+    beta=.10)) 
+
+CatTermination<-list(
+  term="precision",
+  p.term=list(
+        method="threshold",
+        crit=0.3),
+  n.min=10,
+  n.max=50) 
+
+ItemsMod=as.matrix(cbind(Items,"c"=0))
+
+
+SPRT=apply(RespDataNormalDist,1,function(resp){
+    
+    #stages:
+    #1-conduct classification CAT
+    ClassCat<-catIrt(
+                  params=ItemsMod, 
+                  mod="brm", 
+                  catStart=ClassStart,
+                  resp=matrix(resp,nrow=1), 
+                  catMiddle=ClassOperation, 
+                  catTerm=ClassTermination) 
+    
+    #2-once terminated, figure out which items have been administered (Out$it_select$admin) and theta estimate 
+    ThetaEst=ClassCat$cat_theta #est theta
+    SEMEst=ClassCat$cat_sem #est sem
+    CategEst=ClassCat$cat_categ #categorization (1/2)
+    ItemsAdmin=as.numeric(names(which(ClassCat$it_select$admin!=0))) #which items were already administered
+    
+    #3-run new cat w/o previously administered items and theta estimate as prior
+    PostClassCatStart<-list(
+      init.theta=ThetaEst,
+      n.start=5, 
+      select="UW-FI",
+      at="theta", 
+      n.select=4,
+      it.range=c(-1,1), 
+      score="step",
+      range=c(-1,1), 
+      step.size=3,
+      leave.after.MLE=FALSE)
+    
+    PostClassCatOperation<-list(
+      select="UW-FI",at="theta", 
+      n.select=1,
+      it.range=NULL, 
+      score="BME", 
+      ddist=dnorm(x,mean=ThetaEst, sd=SEMEst), 
+      range=c(-6,6), 
+      expos="none") 
+    
+    PostClassCatTermination<-list(
+      term="precision", 
+      p.term=list(method="threshold",crit=.3), 
+      n.min=10, 
+      n.max=50)
+    
+    PostClassCat<-catIrt(
+      params=ItemsMod[-ItemsAdmin,],
+      mod="brm", 
+      resp=matrix(resp[-ItemsAdmin],nrow=1),
+      catStart=PostClassCatStart, 
+      catMiddle=PostClassCatOperation, 
+      catTerm=PostClassCatTermination) 
+    
+    Cat<-catIrt(
+      params=ItemsMod[,], 
+      mod="brm", 
+      resp=matrix(resp,nrow=1), 
+      catStart=ClassStart, 
+      catMiddle=ClassOperation, 
+      catTerm=CatTermination) 
+
+  list(
+    "ClassCat"=ClassCat,
+    "PostClassCat"=PostClassCat,
+    "Cat"=Cat)
+})
+
+
+SPRTUnif=apply(RespDataUniformDist,1,function(resp){
+    
+    #stages:
+    #1-conduct classification CAT
+    ClassCat<-catIrt(
+                  params=ItemsMod, 
+                  mod="brm", 
+                  catStart=ClassStart,
+                  resp=matrix(resp,nrow=1), 
+                  catMiddle=ClassOperation, 
+                  catTerm=ClassTermination) 
+    
+    #2-once terminated, figure out which items have been administered (Out$it_select$admin) and theta estimate 
+    ThetaEst=ClassCat$cat_theta #est theta
+    SEMEst=ClassCat$cat_sem #est sem
+    CategEst=ClassCat$cat_categ #categorization (1/2)
+    ItemsAdmin=as.numeric(names(which(ClassCat$it_select$admin!=0))) #which items were already administered
+    
+    #3-run new cat w/o previously administered items and theta estimate as prior
+    PostClassCatStart<-list(
+      init.theta=ThetaEst,
+      n.start=5, 
+      select="UW-FI",
+      at="theta", 
+      n.select=4,
+      it.range=c(-1,1), 
+      score="step",
+      range=c(-1,1), 
+      step.size=3,
+      leave.after.MLE=FALSE)
+    
+    PostClassCatOperation<-list(
+      select="UW-FI",at="theta", 
+      n.select=1,
+      it.range=NULL, 
+      score="BME", 
+      ddist=dnorm(x,mean=ThetaEst, sd=SEMEst), 
+      range=c(-6,6), 
+      expos="none") 
+    
+    PostClassCatTermination<-list(
+      term="precision", 
+      p.term=list(method="threshold",crit=.3), 
+      n.min=10, 
+      n.max=50)
+    
+    PostClassCat<-catIrt(
+      params=ItemsMod[-ItemsAdmin,],
+      mod="brm", 
+      resp=matrix(resp[-ItemsAdmin],nrow=1),
+      catStart=PostClassCatStart, 
+      catMiddle=PostClassCatOperation, 
+      catTerm=PostClassCatTermination) 
+    
+    Cat<-catIrt(
+      params=ItemsMod[,], 
+      mod="brm", 
+      resp=matrix(resp,nrow=1), 
+      catStart=ClassStart, 
+      catMiddle=ClassOperation, 
+      catTerm=CatTermination) 
+
+  list(
+    "ClassCat"=ClassCat,
+    "PostClassCat"=PostClassCat,
+    "Cat"=Cat)
+})
+
+SPRTNorm=apply(RespDataNormalDist,1,function(resp){
+    
+    #stages:
+    #1-conduct classification CAT
+    ClassCat<-catIrt(
+                  params=ItemsMod, 
+                  mod="brm", 
+                  catStart=ClassStart,
+                  resp=matrix(resp,nrow=1), 
+                  catMiddle=ClassOperation, 
+                  catTerm=ClassTermination) 
+    
+    #2-once terminated, figure out which items have been administered (Out$it_select$admin) and theta estimate 
+    ThetaEst=ClassCat$cat_theta #est theta
+    SEMEst=ClassCat$cat_sem #est sem
+    CategEst=ClassCat$cat_categ #categorization (1/2)
+    ItemsAdmin=as.numeric(names(which(ClassCat$it_select$admin!=0))) #which items were already administered
+    
+    #3-run new cat w/o previously administered items and theta estimate as prior
+    PostClassCatStart<-list(
+      init.theta=ThetaEst,
+      n.start=5, 
+      select="UW-FI",
+      at="theta", 
+      n.select=4,
+      it.range=c(-1,1), 
+      score="step",
+      range=c(-1,1), 
+      step.size=3,
+      leave.after.MLE=FALSE)
+    
+    PostClassCatOperation<-list(
+      select="UW-FI",at="theta", 
+      n.select=1,
+      it.range=NULL, 
+      score="BME", 
+      ddist=dnorm(x,mean=ThetaEst, sd=SEMEst), 
+      range=c(-6,6), 
+      expos="none") 
+    
+    PostClassCatTermination<-list(
+      term="precision", 
+      p.term=list(method="threshold",crit=.3), 
+      n.min=5, 
+      n.max=50)
+    
+    PostClassCat<-catIrt(
+      params=ItemsMod[-ItemsAdmin,],
+      mod="brm", 
+      resp=matrix(resp[-ItemsAdmin],nrow=1),
+      catStart=PostClassCatStart, 
+      catMiddle=PostClassCatOperation, 
+      catTerm=PostClassCatTermination) 
+    
+    Cat<-catIrt(
+      params=ItemsMod[,], 
+      mod="brm", 
+      resp=matrix(resp,nrow=1), 
+      catStart=ClassStart, 
+      catMiddle=ClassOperation, 
+      catTerm=CatTermination) 
+
+  list(
+    "ClassCat"=ClassCat,
+    "PostClassCat"=PostClassCat,
+    "Cat"=Cat)
+})
+
+```
+
+```{r Results}
+
+#Calc NI for Classification+CAT
+SPRTNormNI=sapply(1:nrow(RespDataNormalDist), function(person){
+  list(
+    "Class"=SPRTNorm[[person]]$ClassCat$cat_length,
+    "PostClassCat"=SPRTNorm[[person]]$PostClassCat$cat_length,
+    "Hybrid"=SPRTNorm[[person]]$PostClassCat$cat_length+SPRTNorm[[person]]$ClassCat$cat_length,
+    "Cat"=SPRTNorm[[person]]$Cat$cat_length)})
+
+min(unlist(SPRTNormNI["Hybrid",]))
+max(unlist(SPRTNormNI["Hybrid",]))
+mean(unlist(SPRTNormNI["Hybrid",]))
+sd(unlist(SPRTNormNI["Hybrid",]))
+
+min(unlist(SPRTNormNI["Cat",]))
+max(unlist(SPRTNormNI["Cat",]))
+mean(unlist(SPRTNormNI["Cat",]))
+sd(unlist(SPRTNormNI["Cat",]))
+
+
+HybridUnifNI=sapply(unique(PeopleUniformDist),function(theta){
+  mean(unlist(SPRTUnifNI["Hybrid",which(PeopleUniformDist==theta)]))
+})
+
+CatUnifNI=sapply(unique(PeopleUniformDist),function(theta){
+  mean(unlist(SPRTUnifNI["Cat",which(PeopleUniformDist==theta)]))
+})
+
+plot(NA, xlim=c(-3,3), ylim=c(5,50), main="Number of Items", xlab="Theta", ylab="Number of Items Administered")
+lines(seq(-3,3,1), HybridUnifNI, col="red")
+lines(seq(-3,3,1), CatUnifNI, col="blue")
+legend(-1,40, legend=c("Hybrid","Cat"), col=c("red","blue"),lty=c(1,1))
+
+SPRTUnifNI=sapply(1:nrow(RespDataUniformDist), function(person){
+  list(
+    "Class"=SPRTUnif[[person]]$ClassCat$cat_length,
+    "PostClassCat"=SPRTUnif[[person]]$PostClassCat$cat_length,
+    "Hybrid"=SPRTUnif[[person]]$PostClassCat$cat_length+SPRTUnif[[1]]$ClassCat$cat_length,
+    "Cat"=SPRTUnif[[person]]$Cat$cat_length)})
+
+HybridUnifNI=sapply(unique(PeopleUniformDist),function(theta){
+  mean(unlist(SPRTUnifNI["Hybrid",which(PeopleUniformDist==theta)]))
+})
+
+CatUnifNI=sapply(unique(PeopleUniformDist),function(theta){
+  mean(unlist(SPRTUnifNI["Cat",which(PeopleUniformDist==theta)]))
+})
+
+plot(NA, xlim=c(-3,3), ylim=c(5,50), main="Number of Items", xlab="Theta", ylab="Number of Items Administered")
+lines(seq(-3,3,1), HybridUnifNI, col="red")
+lines(seq(-3,3,1), CatUnifNI, col="blue")
+legend(-1,40, legend=c("Hybrid","Cat"), col=c("red","blue"),lty=c(1,1))
+
+
+SPRTNormThetaDev=sapply(1:nrow(RespDataNormalDist), function(person){
+  TrueTheta=PeopleNormalDist[person]
+  c("ClassCat"=TrueTheta-SPRTNorm[[person]]$ClassCat$cat_theta,
+  "PostClassCat"=TrueTheta-SPRTNorm[[person]]$PostClassCat$cat_theta,
+  "Cat"=TrueTheta-SPRTNorm[[person]]$Cat$cat_theta)
+})
+
+SPRTUnifThetaDev=sapply(1:nrow(RespDataUniformDist), function(person){
+  TrueTheta=PeopleUniformDist[person]
+  c("ClassCat"=TrueTheta-SPRTUnif[[person]]$ClassCat$cat_theta,
+  "PostClassCat"=TrueTheta-SPRTUnif[[person]]$PostClassCat$cat_theta,
+  "Cat"=TrueTheta-SPRTUnif[[person]]$Cat$cat_theta)
+})
+
+#bland altman plot for 
+
+SPRTNormBias=rowMeans(SPRTNormThetaDev)
+SPRTUnifBias=rowMeans(SPRTUnifThetaDev)
+
+HybridUnifBias=sapply(unique(PeopleUniformDist),function(theta){
+  mean(unlist(SPRTUnifThetaDev["PostClassCat",which(PeopleUniformDist==theta)]))
+})
+
+CatUnifBias=sapply(unique(PeopleUniformDist),function(theta){
+  mean(unlist(SPRTUnifThetaDev["Cat",which(PeopleUniformDist==theta)]))
+})
+
+plot(NA, xlim=c(-3,3), ylim=c(-5,5), main="Bias", xlab="Theta", ylab="Bias")
+lines(seq(-3,3,1), HybridUnifBias, col="red")
+lines(seq(-3,3,1), CatUnifBias, col="blue")
+abline(h=0, lty=2)
+legend(-1,4, legend=c("Hybrid","Cat"), col=c("red","blue"),lty=c(1,1))
+
+
+SPRTNormRMSE=sqrt(rowMeans(SPRTNormThetaDev^2)/ncol(SPRTNormThetaDev))
+SPRTUnifRMSE=sqrt(rowMeans(SPRTNormThetaDev^2)/ncol(SPRTNormThetaDev))
+
+HybridUnifRMSE=sapply(unique(PeopleUniformDist),function(theta){
+  sqrt(mean(unlist(SPRTUnifThetaDev["PostClassCat",which(PeopleUniformDist==theta)])^2)/500)
+})
+
+CatUnifRMSE=sapply(unique(PeopleUniformDist),function(theta){
+  sqrt(mean(unlist(SPRTUnifThetaDev["Cat",which(PeopleUniformDist==theta)])^2)/500)
+})
+
+plot(NA, xlim=c(-3,3), ylim=c(0,0.25), main="RMSE", xlab="Theta", ylab="RMSE")
+lines(seq(-3,3,1), HybridUnifRMSE, col="red")
+lines(seq(-3,3,1), CatUnifRMSE, col="blue")
+legend(-1,0.25, legend=c("Hybrid","Cat"), col=c("red","blue"),lty=c(1,1))
+
+############
+
+
+HybridUnifSEM=sapply(unique(PeopleUniformDist),function(theta){
+  mean(sapply(which(PeopleUniformDist==theta), function(person){
+    SPRTUnif[[person]]$PostClassCat$cat_sem}),na.rm=TRUE)})
+
+CatUnifSEM=sapply(unique(PeopleUniformDist),function(theta){
+  mean(sapply(which(PeopleUniformDist==theta), function(person){
+    SPRTUnif[[person]]$Cat$cat_sem}),na.rm=TRUE)})
+
+plot(NA, xlim=c(-3,3), ylim=c(0,0.5), main="Average SEM", xlab="Theta", ylab="Standard Error of Measurement")
+lines(seq(-3,3,1), HybridUnifSEM, col="red")
+lines(seq(-3,3,1), CatUnifSEM, col="blue")
+legend(-1,0.5, legend=c("Hybrid","Cat"), col=c("red","blue"),lty=c(1,1))
+
+
+############
+
+#Add classification
+
+SPRTNormClassAcc=sapply(1:nrow(RespDataNormalDist), function(person){
+  SPRTNorm[[person]]$ClassCat$cat_categ == (PeopleNormalDist[person]>CutPoint)+1})
+
+SPRTUnifClassAcc=sapply(1:nrow(RespDataUniformDist), function(person){
+  SPRTUnif[[person]]$ClassCat$cat_categ == (PeopleUniformDist[person]>CutPoint)+1})
+
+mean(SPRTNormClassAcc)
+mean(SPRTUnifClassAcc)
+
+HybridUniAcc=sapply(unique(PeopleUniformDist),function(theta){
+    mean(sapply(which(PeopleUniformDist==theta),function(person){
+      SPRTUnif[[person]]$ClassCat$cat_categ == (PeopleUniformDist[person]>CutPoint)+1}))
+})
+
+names(HybridUniAcc)=seq(-3,3,1)
+
+plot(seq(-3,3,1),HybridUniAcc, xlim=c(-3,3), ylim=c(0,1.1),type="l",main="Classification Accuracy", xlab="Theta", ylab="Average Classification Accuracy")
+abline(v=CutPoint, lty=2)
+
+HybridUniAcc
+
+
+#Bland Altman Plots
+
+
+
+```
+
+
+
+
+
+###########
+
+```{r Graveyard_SCTsim}
+
+#Order Items According to the information they provide at the cut-point
+MostInformativeItemsAtCutPoint=
+  order(decreasing=TRUE,
+    apply(Items,1,function(item){
+      prob=1/(1+exp(-1.7*item["a"]*(CutPoint-item["b"])))
+      Info=1.7^2*a^2*prob*(1-prob)}))
+
+#Likelihood function
+  lh=Vectorize(function(x,min=FALSE){
+    lh=prod(
+      sapply(itemnums,function(item){
+          prob=1/(1+exp(-1.7*Items[item,"a"]*(x-Items[item,"b"])))
+        if(personResp[item]==0){prob=1-prob}
+        prob}))
+    if(min==TRUE){lh=1-lh}
+    lh
+  })
+
+####for consistent response vectors, 0 seems to be the default for not able to estimate??? look into nlm$code #3?
+    
+temp=lapply(1:length(PeopleNormalDist) ,function(person){
+#temp=lapply(1:5,function(person){
+    PeopleNormalDist[person]  
+    personResp=RespDataNormalDist[person,]
+
+  #Likelihood function
+    lh=Vectorize(function(x,min=FALSE){
+      lh=prod(
+        sapply(itemnums,function(item){
+            prob=1/(1+exp(-1.7*Items[item,"a"]*(x-Items[item,"b"])))
+          if(personResp[item]==0){prob=1-prob}
+          prob}))
+      if(min==TRUE){lh=1-lh}
+      lh
+    })
+
+    #initialize SCT matrix
+    Out=matrix(nrow=6,ncol=0,dimnames=list(c("TrueTheta", "TrueClassification","PropClassification","LHProp","ThetaEst","SEEst"),c()))
+    
+    for(ItemAdminNum in 1:20){
+      
+      itemnums=MostInformativeItemsAtCutPoint[1:ItemAdminNum]
+    
+      Prop=integrate(lh,CutPoint,3.5)$value/integrate(lh,-3.5,3.5)$value
+      PropClassification=NA
+      if(Prop>0.95){PropClassification=TRUE}
+      if(Prop<0.05){PropClassification=FALSE}
+      
+      Out=cbind(Out,c(
+      "TrueTheta"=PeopleNormalDist[person],
+      "TrueClassification"=PeopleNormalDist[person]>CutPoint,
+      "PropClassification"=PropClassification,
+      "LHProp"=Prop,
+      "ThetaEst"=nlminb(0, lh, min=TRUE, lower=-3.5, upper=3.5)$par,  
+      "SEEst"=1/sqrt(sum(sapply(itemnums,function(item){
+          prob=1/(1+exp(-1.7*Items[item,"a"]*(CutPoint-Items[item,"b"])))
+          Info=1.7^2*a^2*prob*(1-prob)})))))
+      
+    }
+    Out
+  
+})
+  
+
+
+```
+
+
+
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+
+
+
+EXTRA CODE
+
+prob <- function(theta, items) {
+    p <- outer(items$b, theta, "-")
+    # p <- items$c + (1 - items$c) / (1 + exp(1.7 * items$a * p)) #3pl model
+    p <- 1 + exp(1.7 * items$a * p)
+    p # row = items, col = theta
+}
+
+info <- function(theta, items) {
+    p <- prob(theta, items)
+    i <- (1.7 * items$a * (p - items$c) / (1 - items$c))^2 * (1 - p) / p
+    i # row = items, col = theta
+}
+
